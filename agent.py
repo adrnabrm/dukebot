@@ -1,0 +1,24 @@
+import os
+from smolagents import ChatMessage, LiteLLMModel
+from smolagents.models import MessageRole
+
+MODEL_ID = os.getenv("DUKEBOT_MODEL", "qwen3.5:4b")
+OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://localhost:11434")
+
+class DukeBot:
+
+    def __init__(self):
+        self.model = LiteLLMModel(
+            model_id=f"ollama_chat/{MODEL_ID}",
+            api_base=OLLAMA_BASE,
+            num_ctx=8192,
+        )
+
+    def run(self, input: str) -> str:
+        response = self.model.generate([
+            ChatMessage(
+                role=MessageRole.USER,
+                content=[{"type": "text", "text": input}],
+            ),
+        ])
+        return response.content
