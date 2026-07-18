@@ -2,6 +2,7 @@ import os
 from smolagents import ChatMessage, LiteLLMModel
 from smolagents.models import MessageRole
 from utils.audio_handler import AudioHandler
+from utils.memory import Memory
 
 MODEL_ID = os.getenv("COMPUTAH_MODEL", "qwen3.5:4b")
 OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://localhost:11434")
@@ -25,6 +26,8 @@ class Computah:
             num_ctx=8192,
             max_tokens=256,
         )
+        # Initialize the memory
+        self.memory = Memory()
         # Initialize the audio handler
         self.audio_handler = AudioHandler()
         print("Computah initialized!")
@@ -43,6 +46,18 @@ class Computah:
 
         self._speak(response)
 
+        self._append_to_memory(user_query_transcript, response)
+
+    # Memory methods
+    def _append_to_memory(self, user_query_transcript: str, response: str) -> None:
+        """Append the user query transcript and response to the memory."""
+        self.memory.add(user_query_transcript, response)
+    
+    def _get_memory(self) -> str:
+        """Get the memory."""
+        return self.memory.get()
+
+    # Audio methods
     def _speak(self, input: str) -> None:
         """Speak the response to the user."""
         self.audio_handler.speak(input)
@@ -59,15 +74,26 @@ class Computah:
         print("Capturing user audio...")
         return self.audio_handler.capture_audio()
 
+    # Model methods
+    def _build_system_prompt(self) -> str:
+        """Build the system prompt with the memory."""
+        return f"""
+        {SYSTEM_PROMPT}
+        Previous conversation history:
+        {self._get_memory()}
+        """
+
     def _query_model(self, input: str) -> str:
-        response = self.model.generate([
-            ChatMessage(
+        system_prompt = ChatMessage(
                 role=MessageRole.SYSTEM,
-                content=[{"type": "text", "text": SYSTEM_PROMPT}],
-            ),
-            ChatMessage(
+                content=[{"type": "text", "text": self._build_system_prompt()}],
+            )
+        chat = ChatMessage(
                 role=MessageRole.USER,
                 content=[{"type": "text", "text": input}],
-            ),
+        )
+        response = self.model.generate([
+            system_prompt,
+            chat,
         ])
         return response.content
