@@ -15,7 +15,7 @@ class Computah:
             model_id=f"ollama_chat/{MODEL_ID}",
             api_base=OLLAMA_BASE,
             num_ctx=8192,
-            max_tokens=128,
+            max_tokens=256,
         )
         # Initialize the audio handler
         self.audio_handler = AudioHandler()
