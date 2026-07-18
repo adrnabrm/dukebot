@@ -34,30 +34,26 @@ class Computah:
 
     def run(self) -> None:
         print("Starting Computah...")
+        while True:
+            try:
+                self._listen_for_wakeword()
 
-        self._listen_for_wakeword()
+                user_query_transcript = self._capture_user_audio()
+                if user_query_transcript:
+                    print(f"User said: {user_query_transcript}")
+                    response = self._query_model(user_query_transcript)
+                else:
+                    raise Exception("No user query transcript captured!")
 
-        user_query_transcript = self._capture_user_audio()
-        if user_query_transcript:
-            print(f"User said: {user_query_transcript}")
-            response = self._query_model(user_query_transcript)
-        else:
-            raise Exception("No user query transcript captured!")
+                self._speak(response)
+                self.memory.add(user_query_transcript, response)
+            except KeyboardInterrupt:
+                print("Computah shutting down...")
+                break
+            except Exception as e:
+                print(f"Error: {e}")
+                continue
 
-        self._speak(response)
-
-        self._append_to_memory(user_query_transcript, response)
-
-    # Memory methods
-    def _append_to_memory(self, user_query_transcript: str, response: str) -> None:
-        """Append the user query transcript and response to the memory."""
-        self.memory.add(user_query_transcript, response)
-    
-    def _get_memory(self) -> str:
-        """Get the memory."""
-        return self.memory.get()
-
-    # Audio methods
     def _speak(self, input: str) -> None:
         """Speak the response to the user."""
         self.audio_handler.speak(input)
@@ -74,26 +70,17 @@ class Computah:
         print("Capturing user audio...")
         return self.audio_handler.capture_audio()
 
-    # Model methods
-    def _build_system_prompt(self) -> str:
-        """Build the system prompt with the memory."""
-        return f"""
-        {SYSTEM_PROMPT}
-        Previous conversation history:
-        {self._get_memory()}
-        """
-
     def _query_model(self, input: str) -> str:
-        system_prompt = ChatMessage(
+        messages = [
+            ChatMessage(
                 role=MessageRole.SYSTEM,
-                content=[{"type": "text", "text": self._build_system_prompt()}],
-            )
-        chat = ChatMessage(
+                content=[{"type": "text", "text": SYSTEM_PROMPT}],
+            ),
+            *self.memory.get(),
+            ChatMessage(
                 role=MessageRole.USER,
                 content=[{"type": "text", "text": input}],
-        )
-        response = self.model.generate([
-            system_prompt,
-            chat,
-        ])
+            ),
+        ]
+        response = self.model.generate(messages)
         return response.content
