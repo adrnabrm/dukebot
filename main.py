@@ -1,10 +1,8 @@
-from agent import DukeBot
+from agent import Computah
 
 def main():
-    bot = DukeBot()
-    transcript = bot.listen()
-    print(transcript)
-    print(bot.run(transcript))
+    bot = Computah()
+    bot.listen()
 
 if __name__ == "__main__":
     main()

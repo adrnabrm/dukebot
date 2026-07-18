@@ -1,9 +1,9 @@
 import os
 from smolagents import ChatMessage, LiteLLMModel
 from smolagents.models import MessageRole
-from utils import AudioHandler
+from utils.audio_handler import AudioHandler
 
-MODEL_ID = os.getenv("DUKEBOT_MODEL", "qwen3.5:4b")
+MODEL_ID = os.getenv("COMPUTAH_MODEL", "qwen3.5:4b")
 OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://localhost:11434")
 
 class Computah:
@@ -21,10 +21,10 @@ class Computah:
         print("Computah initialized!")
 
     def listen(self) -> str:
-        print("Listening for audio...")
-        transcript = self.audio_handler.capture_audio()
-        print("Transcript captured!")
-        return transcript
+        print("Listening for wakeword...")
+        if self.audio_handler.listen_for_wakeword():
+            print("Wakeword detected!")
+        return True
 
     def run(self, input: str) -> str:
         response = self.model.generate([

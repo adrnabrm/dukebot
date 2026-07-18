@@ -2,13 +2,22 @@ import faster_whisper
 import sounddevice as sd
 import wavio
 import numpy as np
+import asyncio
+import os
+from livekit.wakeword import WakeWordModel, WakeWordListener
 
+WAKEWORD_MODEL_PATH = os.getenv("WAKEWORD_MODEL_PATH", None)
 
 class AudioHandler:
     def __init__(self):
         self.model = faster_whisper.WhisperModel("tiny", device="cpu", compute_type="int8")
+        if WAKEWORD_MODEL_PATH:
+            self.wakeword_model = WakeWordModel(models=[WAKEWORD_MODEL_PATH])
+        else:
+            raise ValueError("WAKEWORD_MODEL_PATH is not set")
 
     def capture_audio(self):
+        """Capture audio from the user and transcribe it."""
         try:
             filename = self._record_audio()
         except Exception as e:
@@ -17,6 +26,13 @@ class AudioHandler:
 
         transcript = self._transcribe_audio(filename)
         return transcript
+    
+    def listen_for_wakeword(self):
+        async def _listen_for_wakeword():
+            async with WakeWordListener(self.wakeword_model, threshold=0.1) as listener:
+                return await listener.wait_for_detection()
+            
+        return asyncio.run(_listen_for_wakeword())
 
     def _transcribe_audio(self, filename: str):
         segments, _ = self.model.transcribe(filename)
