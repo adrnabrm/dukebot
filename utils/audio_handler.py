@@ -30,7 +30,7 @@ class AudioHandler:
         try:
             filename = self._record_audio()
         except Exception as e:
-            print(f"Error recording audio: {e}")
+            print(f"[Audio] Error recording: {e}")
             raise e
 
         transcript = self._transcribe_audio(filename)
@@ -40,7 +40,7 @@ class AudioHandler:
         """Listen for the wakeword and return True if detected, False otherwise."""
         async def _listen_for_wakeword():
             async with WakeWordListener(self.wakeword_model, threshold=0.1) as listener:
-                print("Listening for wakeword...")
+                print("[Audio] Listening for wakeword...")
                 return await listener.wait_for_detection()
             
         return asyncio.run(_listen_for_wakeword())
@@ -51,7 +51,7 @@ class AudioHandler:
             self.voice.synthesize_wav(input, wav_file)
         
         data, fs = sf.read("output.wav", dtype="float32")
-        print(input)
+        print(f"[Audio] {input}")
         sd.play(data, fs)
         sd.wait()
 
@@ -98,12 +98,12 @@ class AudioHandler:
                         break
 
         if not frames:
-            print("No audio captured")
+            print("[Audio] No audio captured")
             return
 
         # Concatenate all frames into a single numpy array
         recording = np.concatenate(frames, axis=0)
         # Save the recording to a WAV file
         wavio.write(filename, recording, fs, sampwidth=2)
-        print(f"Recording saved to {filename}")
+        print(f"[Audio] Recording saved to {filename}")
         return filename

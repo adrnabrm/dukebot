@@ -14,9 +14,10 @@ from chromadb.utils.embedding_functions import GoogleGeminiEmbeddingFunction
 class LongTermMemoryMessage(str, Enum):
     SAVED = "Saved."
     FORGOTTEN = "Forgotten."
-    CANCELLED = "Cancelled. Nothing was forgotten."
+    UPDATED = "Updated."
+    CANCELLED = "Cancelled. Nothing was changed."
     NO_MEMORIES = "No memories found."
-    NOT_FOUND = "Memory not found. Nothing was forgotten."
+    NOT_FOUND = "Memory not found. Nothing was changed."
 
 REMEMBER_TOOL = {
     "type": "function",
@@ -72,6 +73,28 @@ FORGET_TOOL = {
     },
 }
 
+UPDATE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "update",
+        "description": "Replace one saved long-term memory with a new fact. Use when the user corrects or changes something already remembered.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What fact to replace, phrased like a stored memory or recall query (e.g. 'user's name'). Not a single word unless that is the whole fact.",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "The new fact to store, written as 'The user ...'",
+                },
+            },
+            "required": ["query", "text"],
+        },
+    },
+}
+
 
 class LongTermMemory:
     def __init__(self, path: str, verbose: bool = False, confidence_threshold: float = 0.6):
@@ -86,12 +109,14 @@ class LongTermMemory:
                 embedding_function=GoogleGeminiEmbeddingFunction(),
             )
         except Exception as e:
-            print(f"Error initializing long term memory: {e}")
+            print(f"[LongTermMemory] Error initializing long term memory: {e}")
             raise e
 
     def remember(self, text: str) -> str:
         """ Remember a piece of information from persistent memory."""
         self.collection.add(documents=[text], ids=[str(uuid.uuid4())])
+        if self._verbose:
+            print(f"[LongTermMemory] remember text={text!r}")
         return LongTermMemoryMessage.SAVED.value
 
     def recall(self, query: str) -> str:
@@ -108,7 +133,7 @@ class LongTermMemory:
 
         if self._verbose:
             for doc, distance in zip(docs, distances):
-                print(f"recall query={query!r} doc={doc!r} distance={distance}")
+                print(f"[LongTermMemory] recall query={query!r} doc={doc!r} distance={distance}")
 
         # Filter out the documents that are too far off the query
         kept = [
@@ -132,7 +157,7 @@ class LongTermMemory:
         memory_id = result["ids"][0][0]
 
         if self._verbose:
-            print(f"find_closest query={query!r} doc={doc!r} distance={distance}")
+            print(f"[LongTermMemory] find_closest query={query!r} doc={doc!r} distance={distance}")
 
         if distance >= self.confidence_threshold:
             return None
@@ -140,3 +165,22 @@ class LongTermMemory:
 
     def delete(self, memory_id: str) -> None:
         self.collection.delete(ids=[memory_id])
+        if self._verbose:
+            print(f"[LongTermMemory] deleted id={memory_id!r}")
+
+    def forget(self, query: str) -> str:
+        """Delete the closest matching memory, or refuse if nothing is close enough."""
+        match = self.find_closest(query)
+        if not match:
+            return LongTermMemoryMessage.NOT_FOUND.value
+        memory_id, _ = match
+        self.delete(memory_id)
+        return LongTermMemoryMessage.FORGOTTEN.value
+
+    def update(self, query: str, text: str) -> str:
+        """Forget the closest match, then remember the new text."""
+        result = self.forget(query)
+        if result != LongTermMemoryMessage.FORGOTTEN.value:
+            return result
+        self.remember(text)
+        return LongTermMemoryMessage.UPDATED.value
