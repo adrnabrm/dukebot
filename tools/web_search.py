@@ -1,4 +1,5 @@
 from enum import Enum
+
 from ddgs import DDGS
 
 class WebSearchStatus(str, Enum):
@@ -24,12 +25,18 @@ WEB_SEARCH_TOOL = {
 }
 
 
-def web_search(query: str) -> str:
-    """
-    Search the web for current information.
-    Returns a list of results that contain the title of the page and its body content.
-    """
-    results = DDGS().text(query, max_results=5)
-    if not results:
-        return WebSearchStatus.NO_RESULTS
-    return "\n".join(f"{r['title']}: {r['body']}" for r in results)
+class WebSearch:
+    def __init__(self, verbose: bool = False):
+        self._verbose = verbose
+
+    def search(self, query: str) -> str:
+        """Search the web for current information."""
+        results = DDGS().text(query, max_results=5)
+        if self._verbose:
+            print(f"[WebSearch] query={query!r} results={len(results) if results else 0}")
+            if results:
+                for r in results:
+                    print(f"[WebSearch] {r['title']}: {r['body']}")
+        if not results:
+            return WebSearchStatus.NO_RESULTS.value
+        return "\n".join(f"{r['title']}: {r['body']}" for r in results)

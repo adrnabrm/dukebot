@@ -4,8 +4,15 @@ import os
 from smolagents import ChatMessage, LiteLLMModel
 from smolagents.models import MessageRole
 
-from tools.longterm_mem import RECALL_TOOL, REMEMBER_TOOL, LongTermMemory
-from tools.web_search import WEB_SEARCH_TOOL, web_search
+from tools.longterm_mem import (
+    FORGET_TOOL,
+    RECALL_TOOL,
+    REMEMBER_TOOL,
+    UPDATE_TOOL,
+    LongTermMemory,
+    LongTermMemoryMessage,
+)
+from tools.web_search import WEB_SEARCH_TOOL, WebSearch
 from utils.audio_handler import AudioHandler
 from utils.memory import Memory
 
@@ -13,6 +20,13 @@ MODEL_ID = os.getenv("COMPUTAH_MODEL", "qwen3.5:4b")
 OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://localhost:11434")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 LONG_TERM_MEMORY_PATH = os.getenv("LONG_TERM_MEMORY_PATH", "data/chroma")
+TOOL_RESULT_LABELS = {
+    "web_search": "WebSearch",
+    "remember": "LongTermMemory",
+    "recall": "LongTermMemory",
+    "forget": "LongTermMemory",
+    "update": "LongTermMemory",
+}
 SYSTEM_PROMPT = """
 You are a voice assistant. Answer the user's latest question using conversation history when it is enough.
 
@@ -21,6 +35,8 @@ Tools:
 - Use web_search only for live or external facts you cannot know from memory (weather, news, scores, current events).
 - Use remember to save durable facts (names, preferences, people, ongoing projects). One clear sentence as "The user ...". Not every turn.
 - Use recall when the answer may live in saved long-term memory and conversation history is not enough.
+- Use forget when the user asks to forget or remove a saved fact. Query the kind of fact (e.g. "user's name"), not just a name or keyword.
+- Use update when the user corrects or changes a saved fact. Query the kind of fact; text is the new "The user ..." sentence. If nothing was saved yet, use remember instead.
 - Do not use tools to recall what the user just said or what you already answered.
 - Do not use tools for general knowledge or everyday how-tos unless the user asks for something current from the web.
 - Only state facts from tools or history. Do not invent details.
@@ -36,7 +52,7 @@ Response style (unbreakable):
 class Computah:
 
     def __init__(self):
-        print("Initializing Computah...")
+        print("[Agent] Initializing Computah...")
         # Initialize the model
         try:
             self.model = LiteLLMModel(
@@ -48,32 +64,35 @@ class Computah:
             # Initialize the memory
             self.memory = Memory()
             self.long_term = LongTermMemory(path=LONG_TERM_MEMORY_PATH, verbose=True)
+            self.web_search = WebSearch(verbose=True)
 
             # Initialize the tools
-            self.tools = [WEB_SEARCH_TOOL, REMEMBER_TOOL, RECALL_TOOL]
+            self.tools = [WEB_SEARCH_TOOL, REMEMBER_TOOL, RECALL_TOOL, FORGET_TOOL, UPDATE_TOOL]
             self.tool_fns = {
-                "web_search": web_search,
+                "web_search": self.web_search.search,
                 "remember": self.long_term.remember,
                 "recall": self.long_term.recall,
+                "forget": self._forget,
+                "update": self._update,
             }
             self.max_tool_rounds = 3
 
             # Initialize the audio handler
             self.audio_handler = AudioHandler()
         except Exception as e:
-            print(f"Error initializing model: {e}")
+            print(f"[Agent] Error initializing: {e}")
             raise e
-        print("Computah initialized!")
+        print("[Agent] Computah initialized!")
 
     def run(self) -> None:
-        print("Starting Computah...")
+        print("[Agent] Starting Computah...")
         while True:
             try:
                 self._listen_for_wakeword()
 
                 user_query_transcript = self._capture_user_audio()
                 if user_query_transcript:
-                    print(f"User said: {user_query_transcript}")
+                    print(f"[Agent] User said: {user_query_transcript}")
                     response = self._query_model(user_query_transcript)
                 else:
                     raise Exception("No user query transcript captured!")
@@ -81,12 +100,13 @@ class Computah:
                 self._speak(response)
                 self.memory.add(user_query_transcript, response)
             except KeyboardInterrupt:
-                print("Computah shutting down...")
+                print("[Agent] Computah shutting down...")
                 break
             except Exception as e:
-                print(f"Error: {e}")
+                print(f"[Agent] Error: {e}")
                 continue
 
+    # Audio handling
     def _speak(self, input: str) -> None:
         """Speak the response to the user."""
         self.audio_handler.speak(input)
@@ -94,15 +114,47 @@ class Computah:
     def _listen_for_wakeword(self) -> bool:
         """Listen for the wakeword and return True if detected, False otherwise."""
         if self.audio_handler.listen_for_wakeword():
-            print("Wakeword detected!")
+            print("[Agent] Wakeword detected!")
             return True
         raise Exception("No wakeword detected!")
     
     def _capture_user_audio(self) -> str:
         """Capture audio from the user and transcribe it."""
-        print("Capturing user audio...")
+        print("[Agent] Capturing user audio...")
         return self.audio_handler.capture_audio()
 
+    # Long-term memory handling
+    def _confirm_yes(self, prompt: str) -> bool:
+        self._speak(prompt)
+        answer = (self._capture_user_audio() or "").strip().lower().strip(".,!?")
+        print(f"[LongTermMemory] confirm answer={answer!r}")
+        return answer.startswith("yes") or answer in ("yeah", "yep", "yup", "sure", "ok", "okay")
+
+    def _forget(self, query: str) -> str:
+        """Find a memory, confirm by voice, then delete if the user says yes."""
+        match = self.long_term.find_closest(query)
+        if not match:
+            return LongTermMemoryMessage.NOT_FOUND.value
+
+        _, doc = match
+        if not self._confirm_yes(f"Are you sure you want to delete this memory: {doc}"):
+            return LongTermMemoryMessage.CANCELLED.value
+
+        return self.long_term.forget(query)
+
+    def _update(self, query: str, text: str) -> str:
+        """Find a memory, confirm by voice, then replace it if the user says yes."""
+        match = self.long_term.find_closest(query)
+        if not match:
+            return LongTermMemoryMessage.NOT_FOUND.value
+
+        _, doc = match
+        if not self._confirm_yes(f"Replace this memory: {doc} with: {text}"):
+            return LongTermMemoryMessage.CANCELLED.value
+
+        return self.long_term.update(query, text)
+
+    # Model handling
     def _query_model(self, input: str) -> str:
         """Query the model with the user input and return the response."""
         messages = [
@@ -130,7 +182,7 @@ class Computah:
             for tool_call in response.tool_calls:
                 name = tool_call.function.name
                 args = tool_call.function.arguments
-                print(f"Tool call: {name} with arguments: {args}")
+                print(f"[Agent] Tool call: {name} with arguments: {args}")
                 self._speak(f"Using tool {name}")
 
                 if isinstance(args, str):
@@ -139,14 +191,17 @@ class Computah:
                     result = self.tool_fns[name](**args)
                     success = True
                 except Exception as e:
-                    print(f"Error using tool {name}: {e}")
+                    print(f"[Agent] Error using tool {name}: {e}")
                     result = f"Error using tool {name}: {e}"
                     success = False
 
                 messages.append(
                     ChatMessage(
                         role=MessageRole.USER,
-                        content=[{"type": "text", "text": f"Tool result ({name}):\n{result}"}],
+                        content=[{
+                            "type": "text",
+                            "text": f"[{TOOL_RESULT_LABELS.get(name, name)}]\n{result}",
+                        }],
                     )
                 )
                 # First good result is enough — go answer
