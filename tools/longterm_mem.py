@@ -1,6 +1,5 @@
 """
 # TODO:
-- add duplicate detection when remembering, eg if user says "I have a cat named Fluffy" and then "I have a cat named Fluffy", don't remember the second one
 - add a way to remove all memories (not as tool to be executed but as a feature of the memory class)
 """
 
@@ -13,6 +12,7 @@ from chromadb.utils.embedding_functions import GoogleGeminiEmbeddingFunction
 
 class LongTermMemoryMessage(str, Enum):
     SAVED = "Saved."
+    ALREADY_SAVED = "Already saved."
     FORGOTTEN = "Forgotten."
     UPDATED = "Updated."
     CANCELLED = "Cancelled. Nothing was changed."
@@ -97,10 +97,17 @@ UPDATE_TOOL = {
 
 
 class LongTermMemory:
-    def __init__(self, path: str, verbose: bool = False, confidence_threshold: float = 0.6):
+    def __init__(
+        self,
+        path: str,
+        verbose: bool = False,
+        confidence_threshold: float = 0.6,
+        duplicate_threshold: float = 0.2,
+    ):
         """ Initialize the long term memory. """
         self._verbose = verbose
         self.confidence_threshold = confidence_threshold
+        self.duplicate_threshold = duplicate_threshold
         try:
             Path(path).mkdir(parents=True, exist_ok=True)
             self.client = chromadb.PersistentClient(path=path)
@@ -113,7 +120,16 @@ class LongTermMemory:
             raise e
 
     def remember(self, text: str) -> str:
-        """ Remember a piece of information from persistent memory."""
+        """Remember a piece of information, skipping near-duplicates."""
+        if self.collection.count() > 0:
+            result = self.collection.query(query_texts=[text], n_results=1)
+            doc = result["documents"][0][0]
+            distance = result["distances"][0][0]
+            if self._verbose:
+                print(f"[LongTermMemory] dedupe text={text!r} doc={doc!r} distance={distance}")
+            if doc.strip().lower() == text.strip().lower() or distance < self.duplicate_threshold:
+                return LongTermMemoryMessage.ALREADY_SAVED.value
+
         self.collection.add(documents=[text], ids=[str(uuid.uuid4())])
         if self._verbose:
             print(f"[LongTermMemory] remember text={text!r}")
