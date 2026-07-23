@@ -4,18 +4,22 @@ import os
 from smolagents import ChatMessage, LiteLLMModel
 from smolagents.models import MessageRole
 
-from tools.web_search import WEB_SEARCH_TOOL, WebSearchStatus, web_search
+from tools.longterm_mem import RECALL_TOOL, REMEMBER_TOOL, LongTermMemory
+from tools.web_search import WEB_SEARCH_TOOL, web_search
 from utils.audio_handler import AudioHandler
 from utils.memory import Memory
 
 MODEL_ID = os.getenv("COMPUTAH_MODEL", "qwen3.5:4b")
 OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://localhost:11434")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+LONG_TERM_MEMORY_PATH = os.getenv("LONG_TERM_MEMORY_PATH", "data/chroma")
 SYSTEM_PROMPT = """
 You are a voice assistant. Answer the user's latest question using conversation history when it is enough.
 
 Tools:
 - Use web_search only for live or external facts you cannot know from memory (weather, news, scores, current events).
+- Use remember to save durable facts (names, preferences, people, ongoing projects). One clear sentence. Not every turn.
+- Use recall when the answer may live in saved long-term memory and conversation history is not enough.
 - Do not use tools to recall what the user just said or what you already answered.
 - Do not use tools for general knowledge or everyday how-tos unless the user asks for something current from the web.
 - Answer only the latest user question. Do not mix in older topics unless they ask about them.
@@ -38,13 +42,19 @@ class Computah:
                 num_ctx=8192,
                 max_tokens=256,
             )
-            # Initialize the tools
-            self.tools = [WEB_SEARCH_TOOL]
-            self.tool_fns = {"web_search": web_search}
-            self.max_tool_rounds = 3
-
             # Initialize the memory
             self.memory = Memory()
+            self.long_term = LongTermMemory(path=LONG_TERM_MEMORY_PATH, verbose=True)
+
+            # Initialize the tools
+            self.tools = [WEB_SEARCH_TOOL, REMEMBER_TOOL, RECALL_TOOL]
+            self.tool_fns = {
+                "web_search": web_search,
+                "remember": self.long_term.remember,
+                "recall": self.long_term.recall,
+            }
+            self.max_tool_rounds = 3
+
             # Initialize the audio handler
             self.audio_handler = AudioHandler()
         except Exception as e:
@@ -124,10 +134,11 @@ class Computah:
                     args = json.loads(args) if args else {}
                 try:
                     result = self.tool_fns[name](**args)
-                    success = result != WebSearchStatus.NO_RESULTS
+                    success = True
                 except Exception as e:
                     print(f"Error using tool {name}: {e}")
                     result = f"Error using tool {name}: {e}"
+                    success = False
 
                 messages.append(
                     ChatMessage(
